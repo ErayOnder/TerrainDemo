@@ -89,7 +89,6 @@ bool Shader::loadFromStrings(const std::string& vertexSource, const std::string&
 }
 
 void Shader::use() const {
-
     if (m_programID != 0) {
         glUseProgram(m_programID);
     }
