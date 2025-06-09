@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a simulation sandbox game that enables players to build and manipulate a dynamic virtual world. Inspired by titles like *Cities: Skylines*, this project emphasizes core mechanics such as environmental interaction, object placement, weather control, and real-time lighting—developed in C++ using OpenGL.
+This is a simulation sandbox game that enables players to build and manipulate a dynamic virtual world. Inspired by titles like *Cities: Skylines*, this project emphasizes core mechanics such as environmental interaction, object placement, and real-time lighting—developed in C++ using OpenGL.
 
 ## Features
 
