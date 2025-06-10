@@ -4,7 +4,7 @@
 #include <vector>
 #include <iostream>
 #include "GameObject.h"
-#include "Shader.h" // Include Shader for RenderAll signature
+#include "../Core/Shader.h" // Include Shader for RenderAll signature
 
 class GameObjectManager{
 public:
@@ -17,5 +17,6 @@ public:
 private:
     std::vector<GameObject*> gameObjects;
 };
+
 
 #endif // GAME_OBJECT_MANAGER_H

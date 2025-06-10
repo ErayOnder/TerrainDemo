@@ -13,6 +13,10 @@
 #include "ObjectLoader/GameObjectManager.h"
 #include "Core/ShadowMap.h"
 #include "Core/AudioManager.h"
+#include "UI/UIRenderer.h"
+#include "UI/UIButton.h"
+#include "UI/UIDropdownMenu.h"
+#include "Core/ObjectConfig.h"
 
 #include <iostream>
 #include <memory>
@@ -29,6 +33,14 @@ vec3 intersectionPoint; // Store the last raycast intersection point
 float objectPosX = 500.0f;
 float ObjectPosY = 10.0f;
 float ObjectPosZ = 600.0f;
+std::vector<vec3> lastDugPoints;
+
+
+// Texture painting state
+bool isTexturePainting = false;
+int currentTextureLayer = 0; // 0: sand, 1: grass, 2: dirt, 3: rock, 4: snow
+float brushRadius = 15.0f;
+float brushStrength = 2.5f;
 
 // Constants
 const int WINDOW_WIDTH = 1920;
@@ -37,6 +49,7 @@ const int GRID_SIZE = 250; // Size of the grid
 const unsigned int SHADOW_WIDTH = 4096, SHADOW_HEIGHT = 4096; // Shadow map resolution
 
 ObjectLoader* objectLoader;
+std::vector<ObjectLoader*> objectLoaders;
 GameObject* gameObject; //SelectedGameObject
 
 // Forward declarations of callback functions
@@ -50,6 +63,10 @@ std::unique_ptr<Material> m_terrainMaterial;
 std::shared_ptr<Shader> shader;
 std::shared_ptr<Shader> m_shadowShader; // Pointer for the shadow shader
 GameObjectManager* objectManager;
+
+// Object configurations loaded from file
+std::vector<ObjectConfig> objectConfigs;
+
 
 // Grid demo application
 class GridDemo
@@ -73,6 +90,7 @@ public:
         InitGrid();
         InitObjects();
         InitLight();
+        InitUI(); // Initialize UI system
         m_celestialLightManager = std::make_unique<CelestialLightManager>(); // INITIALIZE LIGHT MANAGER
         
         // Initialize the Shadow Map
@@ -93,9 +111,28 @@ public:
             float deltaTime = static_cast<float>(currentFrameTime - lastFrameTime);
             lastFrameTime = currentFrameTime;
 
+            // Update camera movement (smooth movement)
+            if (camera) {
+                camera->UpdateMovement(deltaTime);
+            }
+
             // Update the CelestialLightManager
             if (m_celestialLightManager) {
                 m_celestialLightManager->Update(deltaTime);
+            }
+            
+            // Update UI system (for animations)
+            if (m_uiRenderer) {
+                m_uiRenderer->Update(deltaTime);
+            }
+            
+            // Update dropdown menu animations
+            if (m_objectMenu) {
+                m_objectMenu->Update(deltaTime);
+            }
+
+            if (m_objectMenu2) {
+                m_objectMenu2->Update(deltaTime);
             }
             
             RenderScene();
@@ -183,15 +220,8 @@ public:
  
         // Use the unified shader for all rendering
         shader->use();
-          
-        if (m_celestialLightManager) {
-            // Check if the sun is at its peak.
-            bool isSunAtZenith = m_celestialLightManager->IsSunAtZenith();
-            // Enable shadows unless the sun is at its zenith.
-            
- 
-            shader->setUniform("u_shadowsEnabled", !isSunAtZenith);
-        }
+        shader->setUniform("u_shadowsEnabled", true);
+
 
         // Set Global Uniforms
         mat4 viewProjMatrix = camera->GetViewProjMatrix();
@@ -201,7 +231,12 @@ public:
 
         // Bind shadow map texture to an available texture unit (e.g., 5)
         m_shadowMap->Read(GL_TEXTURE5);
-        shader->setUniform("shadowMap", 5); // Tell shader which unit has the shadow map
+        shader->setUniform("shadowMap", 5); 
+        
+        // Debug: Verify shadow map is bound correctly
+        GLint currentTexture;
+        glActiveTexture(GL_TEXTURE5);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
         
         // Light Uniforms (The 'light' object is now configured by CelestialLightManager)
         if (light && shader->isValid()) {
@@ -239,6 +274,11 @@ public:
         // --- Render Objects ---
         shader->setUniform("u_isTerrain", false);
         
+        // Debug: Check if shadow map is still bound before rendering objects
+        glActiveTexture(GL_TEXTURE5);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
+
+        
         // Use raycasting to position objects on terrain
         if (gameObject && gameObject->isInPlacement) {
             vec3 intersectionPoint;
@@ -253,6 +293,11 @@ public:
         }
 
         objectManager->RenderAll(*shader);
+        
+        // --- Render UI ---
+        if (m_uiRenderer) {
+            m_uiRenderer->RenderAll();
+        }
     }
 
     void KeyboardCB(int key, int action)
@@ -270,10 +315,62 @@ public:
                 case GLFW_KEY_C:
                     camera->Print();
                     break;
+                case GLFW_KEY_P:
+                    isTexturePainting = !isTexturePainting;
+                    std::cout << "Texture painting mode: " << (isTexturePainting ? "ON" : "OFF") << std::endl;
+                    break;
+                case GLFW_KEY_1:
+                case GLFW_KEY_2:
+                case GLFW_KEY_3:
+                case GLFW_KEY_4:
+                case GLFW_KEY_5:
+                    currentTextureLayer = key - GLFW_KEY_1;
+                    std::cout << "Selected texture layer: " << currentTextureLayer << std::endl;
+                    break;
+                case GLFW_KEY_EQUAL: // Increase brush size
+                    brushRadius = std::min(brushRadius * 1.2f, 50.0f);
+                    std::cout << "Brush radius: " << brushRadius << std::endl;
+                    break;
+                case GLFW_KEY_MINUS: // Decrease brush size
+                    brushRadius = std::max(brushRadius / 1.2f, 1.0f);
+                    std::cout << "Brush radius: " << brushRadius << std::endl;
+                    break;
+                case GLFW_KEY_L:
+                    // digging
+                    isDigging = !isDigging;
+                    isTexturePainting = false;  // Disable other modes
+                    isFlattening = false;       // Disable other modes
+                    isRaising = false;
+                    isInPlacement = false;
+                    std::cout << "Digging mode: " << (isDigging ? "ON" : "OFF") << std::endl;
+                    break;
+                case GLFW_KEY_K:
+                    // raising
+                    isRaising = !isRaising;
+                    isTexturePainting = false;
+                    isFlattening = false;
+                    isDigging = false;
+                    isInPlacement = false;
+                    if (isRaising) {
+                        // Store initial heightmap when entering raising mode
+                        grid->StoreInitHeightMap();
+                    }
+                    
+                    std::cout << "Raising mode: " << (isRaising ? "ON" : "OFF") << std::endl;
+                    break;
+                case GLFW_KEY_F:
+                    // flatenning
+                    isFlattening = !isFlattening;
+                    isTexturePainting = false;
+                    isDigging = false;
+                    isRaising = false;
+                    isInPlacement = false;
+                    std::cout << "Flattening mode: " << (isFlattening ? "ON" : "OFF") << std::endl;
+                    break;
                 case GLFW_KEY_N:{
                     //TODO:this should be in a thread or a process !!!!!
                     ObjectLoader* obj = new ObjectLoader(*shader);
-                    obj->load("../Objects/Cat/cat.obj", {0});
+                    obj->load("Objects/Cat/cat.obj", {0});
                     int index = objectManager->CreateNewObject(*obj);
                     gameObject = objectManager->GetGameObject(index);
                     gameObject->Scale(0.7f);
@@ -284,7 +381,7 @@ public:
                 case GLFW_KEY_T:{
                     //TODO:this should be in a thread or a process !!!!!
                     ObjectLoader* obj = new ObjectLoader(*shader);
-                    obj->load("../Objects/Tree/Tree1.obj", {0});
+                    obj->load("Objects/Tree/Tree1.obj", {0});
                     int index = objectManager->CreateNewObject(*obj);
                     gameObject = objectManager->GetGameObject(index);
                     gameObject->Scale(10.0f);
@@ -292,26 +389,104 @@ public:
                     break;
                 };
                 case GLFW_KEY_R:
-                    gameObject->RotateY(5.0f);
+                    gameObject->RotateY(15.0f);
                     break;
+                    
             }
         }
-        camera->OnKeyboard(key);
+        
+        // Handle camera movement keys with new smooth movement system
+        camera->OnKeyboardStateChange(key, action);
+        
+        // Keep existing OnKeyboard for non-movement keys (speed adjustment, etc.)
+        if (action == GLFW_PRESS) {
+            camera->OnKeyboard(key);
+        }
     }
 
     void PassiveMouseCB(int x, int y)
     {
-        mouseX = static_cast<double>(x);
-        mouseY = static_cast<double>(y);
-        camera->OnMouse(x, y);
+        // Get current window size
+        int currentWidth, currentHeight;
+        glfwGetWindowSize(window->getHandle(), &currentWidth, &currentHeight);
+        
+        // Store raw coordinates but scale them to match camera's expected dimensions
+        mouseX = (static_cast<double>(x) * WINDOW_WIDTH) / currentWidth;
+        mouseY = (static_cast<double>(y) * WINDOW_HEIGHT) / currentHeight;
+        
+        // Update texture painting while dragging
+        if ((isTexturePainting || isFlattening || isDigging || isRaising) &&
+                    glfwGetMouseButton(window->getHandle(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                    vec3 intersectionPoint;
+                    if (camera->GetTerrainIntersection(mouseX, mouseY, grid.get(), intersectionPoint)) {
+                        if (isTexturePainting) {
+                            grid->PaintTexture(intersectionPoint.x, intersectionPoint.z,
+                                            currentTextureLayer, brushRadius, brushStrength);
+                        } else if (isFlattening) {
+                            grid->Flatten(intersectionPoint.x, intersectionPoint.z,
+                                        brushRadius, brushStrength);
+                        } else if (isDigging) {
+                            std::vector<vec3> newDugPoints = grid->Dig(intersectionPoint.x, intersectionPoint.z,
+                                                    brushRadius, brushStrength);
+                            lastDugPoints.insert(lastDugPoints.end(), newDugPoints.begin(), newDugPoints.end());
+                        } else if (isRaising) {
+                            grid->RaiseTerrain(intersectionPoint.x, intersectionPoint.z,
+                                            brushStrength, brushRadius, 1.0f);
+                        }
+                    }
+                } else {
+            camera->OnMouse(x, y);
+        }
+
+         // Handle UI mouse move
+        if (m_uiRenderer) {
+            m_uiRenderer->HandleMouseMove(x, y);
+        }
     }
 
     void MouseCB(int button, int action, int x, int y)
     {
         if (button == GLFW_MOUSE_BUTTON_LEFT) {
             if (action == GLFW_PRESS) {
-                camera->UpdateMousePos(x, y);
-                camera->StartRotation();
+                // Get current window size and scale coordinates
+                int currentWidth, currentHeight;
+                glfwGetWindowSize(window->getHandle(), &currentWidth, &currentHeight);
+                
+                // Scale coordinates to match camera's expected dimensions
+                mouseX = (static_cast<double>(x) * WINDOW_WIDTH) / currentWidth;
+                mouseY = (static_cast<double>(y) * WINDOW_HEIGHT) / currentHeight;
+                
+                // Check UI first
+                if (m_uiRenderer && m_uiRenderer->HandleMouseClick(x, y)) {
+                    return; // UI handled the click, don't process 3D interaction
+                }
+                    
+                // Only handle camera rotation if we're not in any terrain modification mode
+                if (!isTexturePainting && !isFlattening && !isDigging && !isRaising) {
+                    camera->UpdateMousePos(x, y);
+                    camera->StartRotation();
+                }
+                
+                vec3 intersectionPoint;
+                if (camera->GetTerrainIntersection(mouseX, mouseY, grid.get(), intersectionPoint)) {
+                    if (isTexturePainting) {
+                        grid->PaintTexture(intersectionPoint.x, intersectionPoint.z,
+                                        currentTextureLayer, brushRadius, brushStrength);
+                    }
+                    if (isFlattening) {
+                        grid->Flatten(intersectionPoint.x, intersectionPoint.z,
+                                    brushRadius, brushStrength);
+                    }
+                    if (isDigging) {
+                        std::vector<vec3> newDugPoints = grid->Dig(intersectionPoint.x, intersectionPoint.z,
+                                                brushRadius, brushStrength);
+                        lastDugPoints.insert(lastDugPoints.end(), newDugPoints.begin(), newDugPoints.end());
+                    }
+                    if (isRaising) {
+                        grid->RaiseTerrain(intersectionPoint.x, intersectionPoint.z,
+                                        brushStrength, brushRadius, 1.0f);
+                    }
+                }
                 // Only finalize object placement if there's an object in placement mode
                 if (gameObject && gameObject->isInPlacement) {
                     gameObject->isInPlacement = false;
@@ -342,21 +517,22 @@ private:
         glfwSetCursorPos(window->getHandle(), WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2);
     }
 
-    void PlaceObject() {
-        // Simple object placement - you can modify this to place objects at specific locations
-        // For now, just print a message indicating object placement was attempted
-        
-    }
-
     void InitObjects(){
-        std::cout << "loading objects.." << std::endl;
+        std::cout << "Loading object configurations..." << std::endl;
+        
+        // Load object configurations from file
+        objectConfigs = loadObjectConfigs("../ObjectPaths.txt");
+        std::cout << "Loaded " << objectConfigs.size() << " object configurations" << std::endl;
+        
         objectManager = new GameObjectManager();
-        objectLoader = new ObjectLoader(*shader);
-        objectLoader->load("../Objects/Cottage/cottage_obj.obj");
-        int objectIndex = objectManager->CreateNewObject(*objectLoader);
-        gameObject = objectManager->GetGameObject(objectIndex);
-        gameObject->Scale(5.0f);
-        gameObject->isInPlacement = true; // Initially placed
+        
+        // Load all objects into objectLoaders
+        for(const auto& config : objectConfigs){
+            ObjectLoader* objectLoader = new ObjectLoader(*shader);
+            objectLoader->load(config.filepath, config.intVector); 
+            objectLoaders.push_back(objectLoader);
+            std::cout << "Loaded object: " << config.displayName << " from " << config.filepath << std::endl;
+        }
     }
 
     void InitCamera()
@@ -418,6 +594,107 @@ private:
         }
         std::cout << "Shadow shader loaded successfully." << std::endl;
     }
+    
+    void InitUI()
+    {
+        m_uiRenderer = std::make_unique<UIRenderer>();
+        if (!m_uiRenderer->Init(WINDOW_WIDTH, WINDOW_HEIGHT)) {
+            std::cerr << "Failed to initialize UI renderer" << std::endl;
+            return;
+        }
+        
+        // Create main menu buttons in the left corner
+        auto menuButton = std::make_shared<UIButton>(20.0f, WINDOW_HEIGHT - 130.0f, 120.0f, 120.0f, "Objects");
+        menuButton->SetNormalColor(vec3(1.0f, 1.0f, 1.0f));  // White to show texture clearly
+        menuButton->SetHoverColor(vec3(1.2f, 1.2f, 1.2f));   // Slightly brighter on hover
+        menuButton->SetPressedColor(vec3(0.8f, 0.8f, 0.8f)); // Darker when pressed
+        menuButton->SetTexture("resources/icons/dice.png");  // Add icon texture
+
+        auto menuButton2 = std::make_shared<UIButton>(150.0f, WINDOW_HEIGHT - 130.0f, 120.0f, 120.0f, "Terrain");
+        menuButton2->SetNormalColor(vec3(1.0f, 1.0f, 1.0f));  // White to show texture clearly
+        menuButton2->SetHoverColor(vec3(1.2f, 1.2f, 1.2f));   // Slightly brighter on hover
+        menuButton2->SetPressedColor(vec3(0.8f, 0.8f, 0.8f)); // Darker when pressed
+        menuButton2->SetTexture("resources/icons/brush.png"); // Add grass texture
+        
+        // Create dropdown menus that appears from the top
+        m_objectMenu2 = std::make_shared<UIDropdownMenu>(150.0f, WINDOW_HEIGHT - 130.0f, 120.0f, 120.0f);
+        m_objectMenu2 -> SetUIRenderer(m_uiRenderer.get());
+        m_objectMenu = std::make_shared<UIDropdownMenu>(20.0f, WINDOW_HEIGHT - 130.0f, 120.0f, 120.0f);
+        m_objectMenu->SetUIRenderer(m_uiRenderer.get());
+
+            
+        m_objectMenu2->AddMenuItem("Rock", [this]() {
+            std::cout << "Painting Rock terrain..." << std::endl;
+            // You can add terrain modification logic here later
+            isTexturePainting = true;
+            currentTextureLayer = 3;
+
+        }, "resources/icons/rock.jpg");
+        
+        m_objectMenu2->AddMenuItem("Grass", [this]() {
+            std::cout << "Painting Grass terrain..." << std::endl;
+            // You can add terrain modification logic here later
+            isTexturePainting = true;
+            currentTextureLayer = 2;
+        },"resources/icons/grass1.jpg");
+        
+        m_objectMenu2->AddMenuItem("Dirt", [this]() {
+            std::cout << "Painting Dirt terrain..." << std::endl;
+            // You can add terrain modification logic here later
+            isTexturePainting = true;
+            currentTextureLayer = 1;
+        },"resources/icons/dirt.jpg");
+        m_objectMenu2->AddMenuItem("Sand", [this]() {
+            std::cout << "Painting Dirt terrain..." << std::endl;
+            // You can add terrain modification logic here later
+            isTexturePainting = true;
+            currentTextureLayer = 4;
+        },"resources/icons/sand.jpg");
+
+
+        
+        // Automatically add menu items for different objects from config
+        for(size_t i = 0; i < objectConfigs.size(); ++i) {
+            const auto& config = objectConfigs[i];
+            
+            m_objectMenu->AddMenuItem(config.displayName, [this, i]() {
+                const auto& config = objectConfigs[i];
+                std::cout << "Loading " << config.displayName << "..." << std::endl;
+                
+                int index = objectManager->CreateNewObject(*objectLoaders[i]);
+                GameObject* newGameObject = objectManager->GetGameObject(index);
+                if (newGameObject) {
+                    newGameObject->Scale(config.scale);
+                    if (config.rotX != 0.0f) newGameObject->RotateX(config.rotX);
+                    if (config.rotY != 0.0f) newGameObject->RotateY(config.rotY);
+                    if (config.rotZ != 0.0f) newGameObject->RotateZ(config.rotZ);
+                    newGameObject->isInPlacement = true;
+                    gameObject = newGameObject;
+                }
+                isTexturePainting = false;
+            }, config.iconPath);
+        }
+        
+        // Set button callback to toggle menu
+        menuButton->SetOnClickCallback([this]() {
+            std::cout << "Menu button clicked! Toggling dropdown..." << std::endl;
+            m_objectMenu->ToggleOpen();
+            std::cout << "Dropdown is now: " << (m_objectMenu->IsOpen() ? "OPEN" : "CLOSED") << std::endl;
+        });
+
+        menuButton2->SetOnClickCallback([this]() {
+            std::cout << "Menu button 2 clicked! Toggling dropdown..." << std::endl;
+            m_objectMenu2->ToggleOpen();
+            std::cout << "Dropdown 2 is now: " << (m_objectMenu2->IsOpen() ? "OPEN" : "CLOSED") << std::endl;
+            if(!m_objectMenu2->IsOpen()) isTexturePainting = false;
+
+        });
+        
+        m_uiRenderer->AddUIElement(menuButton);
+        m_uiRenderer->AddUIElement(menuButton2);
+        
+        std::cout << "UI system initialized with dropdown menu" << std::endl;
+    }
         
     void InitGrid()
     {
@@ -425,7 +702,7 @@ private:
         float textureScale = 10.0f;
 
         grid = std::make_unique<TerrainGrid>();
-        TerrainGrid::TerrainType terrainType = TerrainGrid::TerrainType::FLAT;
+        TerrainGrid::TerrainType terrainType = TerrainGrid::TerrainType::VOLCANIC_CALDERA;
         float maxEdgeHeightForGenerator = 120.0f;
         float centralFlatRatioForGenerator = 0.25f;
 
@@ -437,6 +714,7 @@ private:
 
         const auto& layerPercentages = grid->GetLayerInfo();
         std::vector<std::string> texturePaths = {
+            "resources/textures/sand.jpg",
             "resources/textures/grass.jpg",
             "resources/textures/dirt.jpg",
             "resources/textures/rock.jpg",
@@ -451,13 +729,15 @@ private:
             heightRange = 1.0f;
         }
 
-        float transitionHeight1 = m_minTerrainHeight + heightRange * layerPercentages.layer1_percentage;
-        float transitionHeight2 = m_minTerrainHeight + heightRange * layerPercentages.layer2_percentage;
-        float transitionHeight3 = m_minTerrainHeight + heightRange * layerPercentages.layer3_percentage;
-        float transitionHeight4 = m_maxTerrainHeight;
+        // Update transition heights for 5 textures
+        float transitionHeight1 = m_minTerrainHeight + heightRange * 0.20f; // sand -> grass
+        float transitionHeight2 = m_minTerrainHeight + heightRange * 0.40f; // grass -> dirt  
+        float transitionHeight3 = m_minTerrainHeight + heightRange * 0.60f; // dirt -> rock
+        float transitionHeight4 = m_minTerrainHeight + heightRange * 0.80f; // rock -> snow
+        float transitionHeight5 = m_maxTerrainHeight; // final snow
 
         std::vector<float> calculatedTransitions = {
-            transitionHeight1, transitionHeight2, transitionHeight3, transitionHeight4
+            transitionHeight1, transitionHeight2, transitionHeight3, transitionHeight4, transitionHeight5
         };
 
         for (size_t i = 0; i < texturePaths.size(); ++i) {
@@ -490,7 +770,14 @@ private:
 
     std::vector<std::shared_ptr<Texture>> m_terrainTextures;
     std::vector<float> m_terrainTextureTransitionHeights;
-    static const int MAX_SHADER_TEXTURE_LAYERS = 4;
+    std::unique_ptr<UIRenderer> m_uiRenderer;
+    std::shared_ptr<UIDropdownMenu> m_objectMenu, m_objectMenu2;
+    static const int MAX_SHADER_TEXTURE_LAYERS = 5;
+
+    bool isFlattening = false;
+    bool isDigging = false;
+    bool isRaising = false;
+    bool isInPlacement = false;
 };
 
 GridDemo* g_app = nullptr;
