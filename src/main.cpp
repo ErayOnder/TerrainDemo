@@ -40,7 +40,10 @@ std::vector<vec3> lastDugPoints;
 bool isTexturePainting = false;
 int currentTextureLayer = 0; // 0: sand, 1: grass, 2: dirt, 3: rock, 4: snow
 float brushRadius = 15.0f;
-float brushStrength = 2.5f;
+float brushStrength = 1000.0f;  // Reduced from 250.0f for smoother painting
+
+// Terrain modification timing
+double lastTerrainModTime = 0.0;
 
 // Constants
 const int WINDOW_WIDTH = 1920;
@@ -367,27 +370,7 @@ public:
                     isInPlacement = false;
                     std::cout << "Flattening mode: " << (isFlattening ? "ON" : "OFF") << std::endl;
                     break;
-                case GLFW_KEY_N:{
-                    //TODO:this should be in a thread or a process !!!!!
-                    ObjectLoader* obj = new ObjectLoader(*shader);
-                    obj->load("Objects/Cat/cat.obj", {0});
-                    int index = objectManager->CreateNewObject(*obj);
-                    gameObject = objectManager->GetGameObject(index);
-                    gameObject->Scale(0.7f);
-                    gameObject->RotateX(-90.0f);
-                    gameObject->isInPlacement = true; // Put new object in placement mode
-                    break;
-                };
-                case GLFW_KEY_T:{
-                    //TODO:this should be in a thread or a process !!!!!
-                    ObjectLoader* obj = new ObjectLoader(*shader);
-                    obj->load("Objects/Tree/Tree1.obj", {0});
-                    int index = objectManager->CreateNewObject(*obj);
-                    gameObject = objectManager->GetGameObject(index);
-                    gameObject->Scale(10.0f);
-                    gameObject->isInPlacement = true; // Put new object in placement mode
-                    break;
-                };
+                
                 case GLFW_KEY_R:
                     gameObject->RotateY(15.0f);
                     break;
@@ -414,27 +397,40 @@ public:
         mouseX = (static_cast<double>(x) * WINDOW_WIDTH) / currentWidth;
         mouseY = (static_cast<double>(y) * WINDOW_HEIGHT) / currentHeight;
         
-        // Update texture painting while dragging
+        // Update texture painting while dragging with timing control
         if ((isTexturePainting || isFlattening || isDigging || isRaising) &&
                     glfwGetMouseButton(window->getHandle(), GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-                    vec3 intersectionPoint;
-                    if (camera->GetTerrainIntersection(mouseX, mouseY, grid.get(), intersectionPoint)) {
-                        if (isTexturePainting) {
-                            grid->PaintTexture(intersectionPoint.x, intersectionPoint.z,
-                                            currentTextureLayer, brushRadius, brushStrength);
-                        } else if (isFlattening) {
-                            grid->Flatten(intersectionPoint.x, intersectionPoint.z,
-                                        brushRadius, brushStrength);
-                        } else if (isDigging) {
-                            std::vector<vec3> newDugPoints = grid->Dig(intersectionPoint.x, intersectionPoint.z,
-                                                    brushRadius, brushStrength);
-                            lastDugPoints.insert(lastDugPoints.end(), newDugPoints.begin(), newDugPoints.end());
-                        } else if (isRaising) {
-                            grid->RaiseTerrain(intersectionPoint.x, intersectionPoint.z,
-                                            brushStrength, brushRadius, 1.0f);
-                        }
+                    
+            // Add timing control to prevent excessive calls
+            double currentTime = glfwGetTime();
+            const double paintInterval = 1.0 / 30.0; // Limit to 30 operations per second
+            
+            if (currentTime - lastTerrainModTime >= paintInterval) {
+                vec3 intersectionPoint;
+                if (camera->GetTerrainIntersection(mouseX, mouseY, grid.get(), intersectionPoint)) {
+                    // Calculate frame-rate independent strength
+                    float deltaTime = static_cast<float>(currentTime - lastTerrainModTime);
+                    float frameRateAdjustedStrength = brushStrength * deltaTime * 2.0f; // Adjust multiplier as needed
+                    
+                    if (isTexturePainting) {
+                        grid->PaintTexture(intersectionPoint.x, intersectionPoint.z,
+                                        currentTextureLayer, brushRadius, frameRateAdjustedStrength);
+                    } else if (isFlattening) {
+                        grid->Flatten(intersectionPoint.x, intersectionPoint.z,
+                                    brushRadius, frameRateAdjustedStrength);
+                    } else if (isDigging) {
+                        std::vector<vec3> newDugPoints = grid->Dig(intersectionPoint.x, intersectionPoint.z,
+                                                brushRadius, frameRateAdjustedStrength);
+                        lastDugPoints.insert(lastDugPoints.end(), newDugPoints.begin(), newDugPoints.end());
+                    } else if (isRaising) {
+                        grid->RaiseTerrain(intersectionPoint.x, intersectionPoint.z,
+                                        frameRateAdjustedStrength, brushRadius, 1.0f);
                     }
-                } else {
+                    
+                    lastTerrainModTime = currentTime;
+                }
+            }
+        } else {
             camera->OnMouse(x, y);
         }
 
@@ -469,22 +465,28 @@ public:
                 
                 vec3 intersectionPoint;
                 if (camera->GetTerrainIntersection(mouseX, mouseY, grid.get(), intersectionPoint)) {
+                    // Reset timing for initial click
+                    lastTerrainModTime = glfwGetTime();
+                    
+                    // Use reduced strength for initial click to avoid harsh application
+                    float initialStrength = brushStrength * 0.3f;
+                    
                     if (isTexturePainting) {
                         grid->PaintTexture(intersectionPoint.x, intersectionPoint.z,
-                                        currentTextureLayer, brushRadius, brushStrength);
+                                        currentTextureLayer, brushRadius, initialStrength);
                     }
                     if (isFlattening) {
                         grid->Flatten(intersectionPoint.x, intersectionPoint.z,
-                                    brushRadius, brushStrength);
+                                    brushRadius, initialStrength);
                     }
                     if (isDigging) {
                         std::vector<vec3> newDugPoints = grid->Dig(intersectionPoint.x, intersectionPoint.z,
-                                                brushRadius, brushStrength);
+                                                brushRadius, initialStrength);
                         lastDugPoints.insert(lastDugPoints.end(), newDugPoints.begin(), newDugPoints.end());
                     }
                     if (isRaising) {
                         grid->RaiseTerrain(intersectionPoint.x, intersectionPoint.z,
-                                        brushStrength, brushRadius, 1.0f);
+                                        initialStrength, brushRadius, 1.0f);
                     }
                 }
                 // Only finalize object placement if there's an object in placement mode
@@ -645,11 +647,31 @@ private:
             currentTextureLayer = 1;
         },"resources/icons/dirt.jpg");
         m_objectMenu2->AddMenuItem("Sand", [this]() {
-            std::cout << "Painting Dirt terrain..." << std::endl;
+            std::cout << "Painting Sand terrain..." << std::endl;
             // You can add terrain modification logic here later
             isTexturePainting = true;
             currentTextureLayer = 4;
         },"resources/icons/sand.jpg");
+        m_objectMenu2->AddMenuItem("Dig", [this]() {
+            isDigging = !isDigging;
+            isTexturePainting = false;  // Disable other modes
+            isFlattening = false;       // Disable other modes
+            isRaising = false;
+            isInPlacement = false;
+        },"resources/icons/dig.png");
+        m_objectMenu2->AddMenuItem("Raise", [this]() {
+            isRaising = !isRaising;
+                    isTexturePainting = false;
+                    isFlattening = false;
+                    isDigging = false;
+                    isInPlacement = false;
+                    if (isRaising) {
+                        // Store initial heightmap when entering raising mode
+                        grid->StoreInitHeightMap();
+                    }
+        },"resources/icons/raise.png");
+       
+
 
 
         
@@ -669,6 +691,10 @@ private:
                     if (config.rotY != 0.0f) newGameObject->RotateY(config.rotY);
                     if (config.rotZ != 0.0f) newGameObject->RotateZ(config.rotZ);
                     newGameObject->isInPlacement = true;
+                    isDigging =false;
+                    isTexturePainting = false;  // Disable other modes
+                    isFlattening = false;       // Disable other modes
+                    isRaising = false;
                     gameObject = newGameObject;
                 }
                 isTexturePainting = false;
