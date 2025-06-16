@@ -1,4 +1,4 @@
-# Interactive World Building Game
+# Interactive World Building Game 🌄
 
 An interactive, real-time sandbox-style terrain manipulation and world-building game developed as a final project for COMP510. The game allows players to modify terrain, paint textures, place objects, and experience dynamic day/night cycles with realistic lighting and shadows.
 
