@@ -1,4 +1,4 @@
-# Interactive World Building Game 🌄
+# Interactive World Building Game
 
 An interactive, real-time sandbox-style terrain manipulation and world-building game developed as a final project for COMP510. The game allows players to modify terrain, paint textures, place objects, and experience dynamic day/night cycles with realistic lighting and shadows.
 
@@ -17,12 +17,12 @@ An interactive, real-time sandbox-style terrain manipulation and world-building 
 ## 🖼 Screenshots
 
 <p align="center">
-  <img src="docs/volcanic_caldera.png" width="300"/>
-  <img src="docs/fault_formation.png" width="300"/>
-  <img src="docs/texture_painting.png" width="300"/>
-  <img src="docs/day_night_cycle.png" width="300"/>
-  <img src="docs/shadows.png" width="300"/>
-  <img src="docs/ui_elements.png" width="300"/>
+  <img src="project_screenshot1.png" width="300"/>
+  <img src="project_screenshot2.png" width="300"/>
+  <img src="project_screenshot3.png" width="300"/>
+  <img src="project_screenshot4.png" width="300"/>
+  <img src="project_screenshot5.png" width="300"/>
+  <img src="project_screenshot6.png" width="300"/>
 </p>
 
 ## 🧱 System Architecture Overview
@@ -71,7 +71,6 @@ An interactive, real-time sandbox-style terrain manipulation and world-building 
 - **SFML**: Audio streaming
 - **Assimp**: 3D model loading
 - **Custom Engine Components**: UI, camera, terrain, lighting
-
 
 ## 👥 Team
 
